@@ -8,18 +8,27 @@ import threading
 import logging
 import re
 import os
+from flask import Flask, request, abort
 
 # ---------------- CONFIG ----------------
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8213222692:AAGQPfCzQpCKspfHy9SKd8zsWFxuZlvAYKA")  # <-- replace with your token or set env var
-ADMIN_ID = int(os.getenv("ADMIN_ID", "6506705983"))        # <-- replace with your admin id
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "@pratik_cmd") # <-- replace if needed
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8213222692:AAGQPfCzQpCKspfHy9SKd8zsWFxuZlvAYKA")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "6506705983"))
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "@pratik_cmd")
+# Webhook配置
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "https://your-domain.com")  # 你的域名
+WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", 443))  # 通常443或8443
+WEBHOOK_LISTEN = os.getenv("WEBHOOK_LISTEN", "0.0.0.0")  # 监听所有IP
+WEBHOOK_URL_BASE = f"{WEBHOOK_HOST}:{WEBHOOK_PORT}"
+WEBHOOK_URL_PATH = f"/{BOT_TOKEN}/"
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+app = Flask(__name__)
 
 # ---------------- LOGGING ----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # ---------------- DATABASE ----------------
+# (保持原有的数据库代码不变)
 conn = sqlite3.connect("systematic_promo.db", check_same_thread=False)
 cur = conn.cursor()
 
@@ -80,6 +89,7 @@ CREATE TABLE IF NOT EXISTS selections (
 conn.commit()
 
 # ---------------- HELPERS ----------------
+# (保持所有原有的辅助函数不变)
 def save_user(user, ref_code=None):
     """
     Save new user. If ref_code is provided (format REF{user_id}) then set referred_by.
@@ -207,6 +217,7 @@ def bot_is_admin_in(chat_id):
         return False
 
 # ---------------- KEYBOARDS ----------------
+# (保持所有原有的键盘函数不变)
 def main_menu_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row("📊 My Account", "💰 Wallet & Referral")
@@ -246,6 +257,7 @@ def support_kb():
     return kb
 
 # ---------------- HANDLERS ----------------
+# (保持所有原有的处理函数不变)
 @bot.message_handler(commands=["start"])
 def start(m):
     # parse referral param if present
@@ -656,7 +668,61 @@ def catch_all_save(m):
     save_material(m.from_user.id, m.text)
     bot.reply_to(m, f"Saved automatically! Total saved texts: {len(get_materials(m.from_user.id))}")
 
-# ---------------- START POLLING ----------------
+# ---------------- WEBHOOK ENDPOINTS ----------------
+@app.route(WEBHOOK_URL_PATH, methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return ''
+    else:
+        abort(403)
+
+@app.route('/')
+def index():
+    return 'Bot is running!'
+
+@app.route('/set_webhook', methods=['GET', 'POST'])
+def set_webhook():
+    try:
+        # 移除现有webhook
+        bot.remove_webhook()
+        time.sleep(0.1)
+        
+        # 设置新的webhook
+        s = bot.set_webhook(url=WEBHOOK_HOST + WEBHOOK_URL_PATH)
+        
+        if s:
+            return f"Webhook setup successful! URL: {WEBHOOK_HOST + WEBHOOK_URL_PATH}"
+        else:
+            return "Webhook setup failed"
+    except Exception as e:
+        return f"Error setting webhook: {str(e)}"
+
+@app.route('/remove_webhook', methods=['GET', 'POST'])
+def remove_webhook():
+    try:
+        s = bot.remove_webhook()
+        if s:
+            return "Webhook removed successfully"
+        else:
+            return "Failed to remove webhook"
+    except Exception as e:
+        return f"Error removing webhook: {str(e)}"
+
+# ---------------- START WEBHOOK ----------------
 if __name__ == "__main__":
-    logging.info("Bot started.")
-    bot.infinity_polling(timeout=60, long_polling_timeout = 5)
+    logging.info("Bot started in webhook mode.")
+    
+    # 启动时自动设置webhook
+    try:
+        bot.remove_webhook()
+        time.sleep(0.5)
+        bot.set_webhook(url=WEBHOOK_HOST + WEBHOOK_URL_PATH)
+        logging.info(f"Webhook set to: {WEBHOOK_HOST + WEBHOOK_URL_PATH}")
+    except Exception as e:
+        logging.error(f"Failed to set webhook: {e}")
+    
+    # 启动Flask应用
+    app.run(host=WEBHOOK_LISTEN, port=WEBHOOK_PORT)
