@@ -14,12 +14,20 @@ from flask import Flask, request, abort
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8213222692:AAGQPfCzQpCKspfHy9SKd8zsWFxuZlvAYKA")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "6506705983"))
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "@pratik_cmd")
-# Webhook配置
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "https://your-domain.com")  # 你的域名
-WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", 443))  # 通常443或8443
-WEBHOOK_LISTEN = os.getenv("WEBHOOK_LISTEN", "0.0.0.0")  # 监听所有IP
-WEBHOOK_URL_BASE = f"{WEBHOOK_HOST}:{WEBHOOK_PORT}"
+
+# Render-specific configuration
+RENDER_EXTERNAL_HOSTNAME = os.getenv('RENDER_EXTERNAL_HOSTNAME')
+PORT = int(os.getenv('PORT', 10000))  # Render provides PORT environment variable
+
+# Use Render's URL if available, otherwise fallback
+if RENDER_EXTERNAL_HOSTNAME:
+    WEBHOOK_HOST = f"https://{RENDER_EXTERNAL_HOSTNAME}"
+else:
+    # For local testing or if you have custom domain
+    WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "https://your-bot-name.onrender.com")
+
 WEBHOOK_URL_PATH = f"/{BOT_TOKEN}/"
+WEBHOOK_URL = WEBHOOK_HOST + WEBHOOK_URL_PATH
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 app = Flask(__name__)
@@ -28,7 +36,6 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # ---------------- DATABASE ----------------
-# (保持原有的数据库代码不变)
 conn = sqlite3.connect("systematic_promo.db", check_same_thread=False)
 cur = conn.cursor()
 
@@ -89,7 +96,6 @@ CREATE TABLE IF NOT EXISTS selections (
 conn.commit()
 
 # ---------------- HELPERS ----------------
-# (保持所有原有的辅助函数不变)
 def save_user(user, ref_code=None):
     """
     Save new user. If ref_code is provided (format REF{user_id}) then set referred_by.
@@ -217,7 +223,6 @@ def bot_is_admin_in(chat_id):
         return False
 
 # ---------------- KEYBOARDS ----------------
-# (保持所有原有的键盘函数不变)
 def main_menu_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row("📊 My Account", "💰 Wallet & Referral")
@@ -257,7 +262,6 @@ def support_kb():
     return kb
 
 # ---------------- HANDLERS ----------------
-# (保持所有原有的处理函数不变)
 @bot.message_handler(commands=["start"])
 def start(m):
     # parse referral param if present
@@ -675,54 +679,92 @@ def webhook():
         json_string = request.get_data().decode('utf-8')
         update = types.Update.de_json(json_string)
         bot.process_new_updates([update])
-        return ''
+        return 'OK'
     else:
         abort(403)
 
 @app.route('/')
 def index():
-    return 'Bot is running!'
+    return '🤖 Bot is running on Render!<br><a href="/set_webhook">Set Webhook</a> | <a href="/remove_webhook">Remove Webhook</a>'
 
-@app.route('/set_webhook', methods=['GET', 'POST'])
+@app.route('/set_webhook', methods=['GET'])
 def set_webhook():
     try:
-        # 移除现有webhook
+        # Remove existing webhook
         bot.remove_webhook()
-        time.sleep(0.1)
+        time.sleep(1)
         
-        # 设置新的webhook
-        s = bot.set_webhook(url=WEBHOOK_HOST + WEBHOOK_URL_PATH)
+        # Set new webhook
+        webhook_set = bot.set_webhook(url=WEBHOOK_URL)
         
-        if s:
-            return f"Webhook setup successful! URL: {WEBHOOK_HOST + WEBHOOK_URL_PATH}"
+        if webhook_set:
+            return f"""
+            <h3>✅ Webhook Setup Successful!</h3>
+            <p>Bot Token: {BOT_TOKEN[:10]}...</p>
+            <p>Webhook URL: {WEBHOOK_URL}</p>
+            <p>Render Domain: {RENDER_EXTERNAL_HOSTNAME}</p>
+            <p><a href="/">Back to Home</a></p>
+            """
         else:
-            return "Webhook setup failed"
+            return f"""
+            <h3>❌ Webhook Setup Failed!</h3>
+            <p>Could not set webhook to: {WEBHOOK_URL}</p>
+            <p><a href="/">Back to Home</a></p>
+            """
     except Exception as e:
-        return f"Error setting webhook: {str(e)}"
+        return f"""
+        <h3>❌ Error Setting Webhook</h3>
+        <p>Error: {str(e)}</p>
+        <p><a href="/">Back to Home</a></p>
+        """
 
-@app.route('/remove_webhook', methods=['GET', 'POST'])
+@app.route('/remove_webhook', methods=['GET'])
 def remove_webhook():
     try:
-        s = bot.remove_webhook()
-        if s:
-            return "Webhook removed successfully"
+        removed = bot.remove_webhook()
+        if removed:
+            return """
+            <h3>✅ Webhook Removed Successfully!</h3>
+            <p>The bot will now use polling mode.</p>
+            <p><a href="/">Back to Home</a></p>
+            """
         else:
-            return "Failed to remove webhook"
+            return """
+            <h3>⚠️ Webhook Removal Failed</h3>
+            <p>Could not remove webhook.</p>
+            <p><a href="/">Back to Home</a></p>
+            """
     except Exception as e:
-        return f"Error removing webhook: {str(e)}"
+        return f"""
+        <h3>❌ Error Removing Webhook</h3>
+        <p>Error: {str(e)}</p>
+        <p><a href="/">Back to Home</a></p>
+        """
+
+# ---------------- HEALTH CHECK ----------------
+@app.route('/health', methods=['GET'])
+def health_check():
+    return {'status': 'healthy', 'service': 'telegram-bot', 'timestamp': datetime.utcnow().isoformat()}
 
 # ---------------- START WEBHOOK ----------------
 if __name__ == "__main__":
-    logging.info("Bot started in webhook mode.")
+    logging.info(f"🚀 Bot starting on Render...")
+    logging.info(f"📡 Webhook URL: {WEBHOOK_URL}")
+    logging.info(f"🔧 Port: {PORT}")
+    logging.info(f"🌐 External Hostname: {RENDER_EXTERNAL_HOSTNAME}")
     
-    # 启动时自动设置webhook
+    # Try to set webhook automatically on startup
     try:
-        bot.remove_webhook()
-        time.sleep(0.5)
-        bot.set_webhook(url=WEBHOOK_HOST + WEBHOOK_URL_PATH)
-        logging.info(f"Webhook set to: {WEBHOOK_HOST + WEBHOOK_URL_PATH}")
+        if RENDER_EXTERNAL_HOSTNAME:
+            logging.info("🔄 Auto-setting webhook...")
+            bot.remove_webhook()
+            time.sleep(2)
+            bot.set_webhook(url=WEBHOOK_URL)
+            logging.info("✅ Webhook set automatically")
+        else:
+            logging.warning("⚠️ No external hostname detected. Webhook not set automatically.")
     except Exception as e:
-        logging.error(f"Failed to set webhook: {e}")
+        logging.error(f"❌ Failed to auto-set webhook: {e}")
     
-    # 启动Flask应用
-    app.run(host=WEBHOOK_LISTEN, port=WEBHOOK_PORT)
+    # Start Flask app on Render's provided port
+    app.run(host='0.0.0.0', port=PORT)
